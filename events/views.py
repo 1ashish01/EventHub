@@ -1,6 +1,7 @@
 from rest_framework import viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from django.db import transaction
 
 from .models import Event, Reservation
 from .serializers import EventSerializer, ReservationSerializer
@@ -41,19 +42,23 @@ class ReservationViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'])
     def cancel(self, request, pk=None):
+        with transaction.atomic():
+            reservation = self.get_object()
 
-        reservation = self.get_object()
+            if reservation.status == 'cancelled':
+                return Response(
+                    {'error': 'Already cancelled.'},
+                    status=400
+                )
 
-        if reservation.status == 'cancelled':
-            return Response(
-                {'error': 'Already cancelled.'},
-                status=400
+            event = Event.objects.select_for_update().get(
+                pk=reservation.event_id
             )
 
-        reservation.event.available_seats += reservation.seats_reserved
-        reservation.event.save()
+            event.available_seats += reservation.seats_reserved
+            event.save(update_fields=['available_seats'])
 
-        reservation.status = 'cancelled'
-        reservation.save()
+            reservation.status = 'cancelled'
+            reservation.save(update_fields=['status'])
 
         return Response(self.get_serializer(reservation).data)
